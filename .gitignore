@@ -1,5 +1,7 @@
 .erlang.mk/
 .idea/
+_build/*
 deps/
+*.lock
 ebin/
-*.config
+Makefile.bak

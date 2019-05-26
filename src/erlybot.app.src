@@ -1,0 +1,9 @@
+{application, 'erlybot', [
+        {description, "Wrapper for telegram bots api"},
+        {vsn, "0.1.0"},
+        {modules, ['erlybot','erlybot_app','erlybot_srv','erlybot_sup']},
+        {registered, [erlybot_sup]},
+        {applications, [kernel,stdlib,jsx]},
+        {mod, {erlybot_app, []}},
+        {env, []}
+]}.

@@ -8,58 +8,78 @@
 %%%-------------------------------------------------------------------
 -module(erlybot).
 -author("vshev4enko").
--include("erlybot_int.hrl").
 
 
 %% API
--export([
-    start_bot/1,
-    get_bot_config/1,
-    subscribe/1,
-    get_me/1,
-    get_updates/2,
-    send_message/2,
-    start_pooling/1,
-    stop_pooling/1]).
+-export([get_me/1,
+         get_updates/2,
+         set_webhook/2,
+         delete_webhook/1,
+         get_webhook_info/1,
+         send_message/2,
+         forward_message/2,
+         send_photo/2]).
 
-%% API
-get_me(Name) ->
-    gen_server:call(Name, {?GET_ME, #{}}).
 
-get_updates(Name, Params) ->
-    gen_server:call(Name, {?GET_UPDATES, Params}).
+%% Getting updates api
+get_me(Bot) ->
+    api_call(Bot, <<"getMe">>).
 
-send_message(Name, #{<<"chat_id">> := _, <<"text">> := _}=Params) ->
-    gen_server:call(Name, {?SEND_MESSAGE, Params}).
+get_updates(Bot, #{} = Args) ->
+    api_call(Bot, <<"getUpdates">>, {json, Args#{timeout => 0}}).
 
-forward_message(Name, #{<<"chat_id">> := _, <<"from_chat_id">> := _, <<"message_id">> := _}=Params) ->
-    gen_server:call(Name, {?FORWARD_MESSAGE, Params}).
+set_webhook(Bot, #{url := _} = Args) ->
+    api_call(Bot, <<"setWebhook">>, {json, Args}).
 
-start_pooling(Name) ->
-    gen_server:call(Name, start_pooling).
+delete_webhook(Bot) ->
+    api_call(Bot, <<"deleteWebhook">>).
 
-stop_pooling(Name) ->
-    gen_server:call(Name, stop_pooling).
+get_webhook_info(Bot) ->
+    api_call(Bot, <<"getWebhookInfo">>).
 
-start_bot(#{name := _, token := _}=Cfg) ->
-    supervisor:start_child(erlybot_sup, [Cfg]).
+%% Methods
+send_message(Bot, #{chat_id := _, text := _} = Args) ->
+    api_call(Bot, <<"sendMessage">>, {json, Args}).
 
-subscribe(Name) ->
-    gen_server:call(Name, subscribe).
+forward_message(Bot, #{chat_id := _, from_chat_id := _, message_id := _} = Args) ->
+    api_call(Bot, <<"forwardMessage">>, Args).
 
-get_bot_config(BotName) ->
-    case get_env(bots) of
-        {ok, [_|_]=Configs} ->
-            Fun = fun(#{name := Name}=Obj) when Name =:= BotName -> throw({ok, Obj});
-                     (_) -> undefined
-                end,
-            case catch lists:foreach(Fun, Configs) of
-                {ok, #{}} = R -> R;
-                Any -> Any
+send_photo(Bot, #{chat_id := _, photo := _} = Args) ->
+    api_call(Bot, <<"sendPhoto">>, {json, Args}).
 
-            end;
-        Reason -> {error, Reason}
+
+api_call(Bot, Method) ->
+    api_call(Bot, Method, null).
+
+api_call(Bot, Method, Payload) ->
+    Server = get_env(server),
+    Token = get_token(Bot),
+    api_call(Server, Token, Method, Payload).
+
+api_call(Server, Token, Method, Payload) ->
+    Url = get_url(Server, Token, Method),
+    case do_api_call(Url, Payload) of
+        {ok, {{_, 200, "OK"}, _, Data}} -> 
+            jsx:decode(Data, [return_maps]);
+        {ok, {{_, Code, Reason}, _, Data}} ->
+            error_logger:error_msg("Error ~p, reason ~p", [Code, Reason]),
+            jsx:decode(Data, [return_maps])
     end.
 
+
+do_api_call(Url, null) ->
+    httpc:request(get, {Url, []}, [], [{body_format, binary}]);
+do_api_call(Url, {json, Body}) ->
+    httpc:request(post, {Url, [], "application/json", jsx:encode(Body)}, [], [{body_format, binary}]).
+
+get_url(Server, Token, Method) ->
+    Server ++ "/bot" ++ Token ++ "/" ++ binary_to_list(Method).
+
 get_env(Key) ->
-    application:get_env(?MODULE, Key).
+    {ok, Conf} = application:get_env(?MODULE, Key),
+    Conf.
+
+get_token(Bot) ->
+    [{token, Token}] = application:get_env(?MODULE, Bot, token),
+    Token.
+
