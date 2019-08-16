@@ -8,8 +8,9 @@
 
 
 start(_Type, _Args) ->
-	inets:start(),
 	ssl:start(),
+	inets:start(),
+	inets:start(httpc, [{profile, erlybot}]),
 	erlybot_sup:start_link().
 
 stop(_State) ->

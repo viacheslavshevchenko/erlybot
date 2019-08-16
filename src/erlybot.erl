@@ -11,15 +11,48 @@
 
 
 %% API
--export([get_me/1,
+-export([start_pooling/1,
+         start_pooling/2,
+         start_pooling_and_subscribe/1,
+         stop_pooling/1,
+         get_env/1,
+         get_url/3,
+         get_me/1,
          get_updates/2,
          set_webhook/2,
          delete_webhook/1,
          get_webhook_info/1,
          send_message/2,
          forward_message/2,
-         send_photo/2]).
+         send_photo/2,
+         get_chat/2,
+         get_chat_administrators/2]).
 
+
+start_pooling_and_subscribe(Bot) ->
+    start_pooling(Bot, [self()]).
+
+start_pooling(Bot) ->
+    start_pooling(Bot, []).
+
+start_pooling(Bot, Subscribers) ->
+    {ok, Server} = get_env(server),
+    case get_token(Bot) of
+        {ok, Token} ->
+            Args = #{name => Bot, token => Token, server => Server, opts => #{subscribers => Subscribers}},
+            Start = {erlybot_pooling, start_link, [Args]},
+            supervisor:start_child(erlybot_sup, #{id => Bot, start => Start, restart => transient});
+        false ->
+            {error, token_not_found}
+    end.
+
+stop_pooling(Bot) ->
+    case supervisor:terminate_child(erlybot_sup, Bot) of
+        ok -> 
+            supervisor:delete_child(erlybot_sup, Bot);
+        Error ->
+            Error
+    end.
 
 %% Getting updates api
 get_me(Bot) ->
@@ -48,12 +81,19 @@ send_photo(Bot, #{chat_id := _, photo := _} = Args) ->
     api_call(Bot, <<"sendPhoto">>, {json, Args}).
 
 
+
+get_chat(Bot, #{chat_id := _} = Args) ->
+    api_call(Bot, <<"getChat">>, {json, Args}).
+
+get_chat_administrators(Bot, #{chat_id := _} = Args) ->
+    api_call(Bot, <<"getChatAdministrators">>, {json, Args}).
+
 api_call(Bot, Method) ->
     api_call(Bot, Method, null).
 
 api_call(Bot, Method, Payload) ->
-    Server = get_env(server),
-    Token = get_token(Bot),
+    {ok, Server} = get_env(server),
+    {ok, Token} = get_token(Bot),
     api_call(Server, Token, Method, Payload).
 
 api_call(Server, Token, Method, Payload) ->
@@ -68,18 +108,29 @@ api_call(Server, Token, Method, Payload) ->
 
 
 do_api_call(Url, null) ->
-    httpc:request(get, {Url, []}, [], [{body_format, binary}]);
+    httpc:request(get, {Url, []}, [], [{body_format, binary}], ?MODULE);
 do_api_call(Url, {json, Body}) ->
-    httpc:request(post, {Url, [], "application/json", jsx:encode(Body)}, [], [{body_format, binary}]).
+    httpc:request(post, {Url, [], "application/json", jsx:encode(Body)}, [], [{body_format, binary}], ?MODULE).
 
 get_url(Server, Token, Method) ->
     Server ++ "/bot" ++ Token ++ "/" ++ binary_to_list(Method).
 
 get_env(Key) ->
-    {ok, Conf} = application:get_env(?MODULE, Key),
-    Conf.
+    case application:get_env(?MODULE, Key) of
+        {ok, _} = Res -> Res;
+        Any -> Any
+    end.
 
 get_token(Bot) ->
-    [{token, Token}] = application:get_env(?MODULE, Bot, token),
-    Token.
+    case get_env(bots) of
+        {ok, Props} ->
+            case lists:keyfind(Bot, 1, Props) of
+                {Bot, [{token, Token}]} ->
+                    {ok, Token};
+                false ->
+                    false
+            end;
+        undefined ->
+            false
+    end.
 
