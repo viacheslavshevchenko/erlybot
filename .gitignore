@@ -2,6 +2,7 @@
 .idea/
 _build/*
 deps/
+.rebar/
 *.lock
 ebin/
 Makefile.bak

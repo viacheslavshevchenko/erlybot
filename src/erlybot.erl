@@ -75,7 +75,7 @@ send_message(Bot, #{chat_id := _, text := _} = Args) ->
     api_call(Bot, <<"sendMessage">>, {json, Args}).
 
 forward_message(Bot, #{chat_id := _, from_chat_id := _, message_id := _} = Args) ->
-    api_call(Bot, <<"forwardMessage">>, Args).
+    api_call(Bot, <<"forwardMessage">>, {json, Args}).
 
 send_photo(Bot, #{chat_id := _, photo := _} = Args) ->
     api_call(Bot, <<"sendPhoto">>, {json, Args}).

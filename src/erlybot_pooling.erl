@@ -21,7 +21,10 @@
                 server      = null,
                 pooling_ref = null,
                 timer_ref   = null,
+                conn_delay  = 1000,
                 subscribers = ordsets:new()}).
+
+-define(MAXIMUM_DELAY, 5000 * 60).
 
 
 %% API.
@@ -29,14 +32,15 @@ start_link(#{name := Name} = Args) ->
 	gen_server:start_link({local, Name}, ?MODULE, Args, []).
 
 init(#{name := Name, token := Token, server := Server, opts := Opts}) ->
-    inets:start(httpc, [{profile, Name}]),
     #{subscribers := Subscribers} = Opts,
-	{ok, #state{name = Name, 
-                token = Token,
-                server = Server,
-                args = maps:remove(subscribers, Opts), 
-                subscribers = ordsets:from_list(Subscribers),
-                timer_ref = erlang:send_after(0, self(), pool)}}.
+    State = #state{name = Name, 
+                   token = Token,
+                   server = Server,
+                   args = maps:remove(subscribers, Opts), 
+                   subscribers = ordsets:from_list(Subscribers),
+                   timer_ref = erlang:send_after(0, self(), pool)},
+    inets:start(httpc, [{profile, profile(State)}]),
+    {ok, State}. 
 
 handle_call(subscribe, {Pid, _}, #state{subscribers = Subscribers} = State) ->
     {reply, ok, State#state{subscribers = ordsets:add_element(Pid, Subscribers)}};
@@ -48,22 +52,31 @@ handle_call(_Msg, _From, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({http, {FromRef, stream, Json}}, #state{pooling_ref = Ref} = State) when (Ref =:= FromRef) ->
-    Msg = jsx:decode(Json, [return_maps]),
-    {noreply, (handle_response(Msg, State))#state{pooling_ref = null, timer_ref = erlang:send_after(0, self(), pool)}};
-handle_info(pool, State = #state{name = Name, server = Server, token = Token}) ->
+handle_info(pool, State = #state{server = Server, token = Token, conn_delay = Delay}) ->
     Url = erlybot:get_url(Server, Token, <<"getUpdates">>),
     Body = jsx:encode(#{<<"offset">> => State#state.offset,
                         <<"timeout">> => State#state.timeout}),
-    case do_request(Url, Body, Name) of
+    case do_request(Url, Body, profile(State)) of
         {ok, NewRef} ->
             {noreply, State#state{pooling_ref = NewRef, timer_ref = null}};
         {error, Reason} ->
             error_logger:error_report("Error due execute request ~p", [Reason]),
-            {noreply, State#state{pooling_ref = null, timer_ref = erlang:send_after(1000, self(), pool)}}
+            NewDelay = calc_delay(Delay),
+            Timer = erlang:send_after(NewDelay, self(), pool),
+            {noreply, State#state{pooling_ref = null, timer_ref = Timer}}
     end;
+handle_info({http, {FromRef, stream, Json}}, #state{pooling_ref = Ref} = State) when (Ref =:= FromRef) ->
+    Msg = jsx:decode(Json, [return_maps]),
+    NewState = handle_response(Msg, State),
+    Timer = erlang:send_after(0, self(), pool),
+    {noreply, NewState#state{pooling_ref = null, timer_ref = Timer, conn_delay = 1000}};
+handle_info({http, {FromRef, {{_, _Code, _}, _, Reason}}}, #state{pooling_ref = Ref, conn_delay = Delay} = State) when (FromRef =:= Ref) ->
+    error_logger:error_msg("Error ~p", [Reason]),
+    NewDelay = calc_delay(Delay),
+    Timer = erlang:send_after(NewDelay, self(), pool),
+    {noreply, State#state{pooling_ref = null, timer_ref = Timer, conn_delay = NewDelay}};
 handle_info(_Msg, State) ->
-%%    error_logger:info_msg("~nInfo msg ~p", [_Msg]),
+%    error_logger:info_msg("~nInfo msg ~p", [_Msg]),
     {noreply, State}.
 
 terminate(_Reason, _State) ->
@@ -104,3 +117,10 @@ notify_subscribers([Head|Tail], Subscribers) ->
     [Pid ! Head || Pid <- Subscribers, is_process_alive(Pid)],
     notify_subscribers(Tail, Subscribers).
 
+calc_delay(Delay) when (Delay * 2) >= ?MAXIMUM_DELAY ->
+    ?MAXIMUM_DELAY;
+calc_delay(Delay) ->
+    Delay * 2.
+
+profile(#state{name = Name}) -> 
+    Name.
